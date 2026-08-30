@@ -19,33 +19,53 @@ pub enum Op {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BusKind {
     Bit,
+    U4,
     U8,
     U16,
+    U32,
+    U64,
+    Bus(usize),
 }
 
 impl BusKind {
     pub fn width(&self) -> usize {
         match self {
             BusKind::Bit => 1,
+            BusKind::U4 => 8,
             BusKind::U8 => 8,
             BusKind::U16 => 16,
+            BusKind::U32 => 32,
+            BusKind::U64 => 64,
+            BusKind::Bus(size) => *size as usize,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum BusValue {
     Bit(bool),
+    U4(u8), //TODO: maybe do something about this
     U8(u8),
     U16(u16),
+    U32(u32),
+    U64(u64),
+    Bus((usize, Box<[u8]>)),
 }
 
 impl BusValue {
+    pub fn new_bus(size: usize) -> Self {
+        BusValue::Bus((size, vec![0u8; size].into_boxed_slice()))
+    }
+
     pub fn kind(&self) -> BusKind {
         match self {
             BusValue::Bit(_) => BusKind::Bit,
+            BusValue::U4(_) => BusKind::U4,
             BusValue::U8(_) => BusKind::U8,
             BusValue::U16(_) => BusKind::U16,
+            BusValue::U32(_) => BusKind::U32,
+            BusValue::U64(_) => BusKind::U64,
+            BusValue::Bus((size, _)) => BusKind::Bus(*size),
         }
     }
 }
@@ -75,6 +95,17 @@ pub struct SimulationDescriptor<'a> {
     pub output_hash: HashMap<Label<'a>, (Box<[BlockProxy]>, BusValue)>,
     pub output_label_hash: HashMap<BlockProxy, Label<'a>>,
 }
+
+macro_rules! set_bit {
+    ($v:expr, $index:expr, $bitdata:expr) => {
+        if $bitdata {
+            *$v |= 1 << $index
+        } else {
+            *$v &= !(1 << $index)
+        }
+    };
+}
+
 impl<'a> Simulation<'a> {
     pub fn new(descriptor: &SimulationDescriptor<'a>) -> Self {
         assert_eq!(descriptor.size % 8, 0);
@@ -108,13 +139,20 @@ impl<'a> Simulation<'a> {
     }
     pub fn set_input(&mut self, label: Label<'a>, data: BusValue) {
         if let Some((block_map, value)) = self.input_hash.get_mut(label) {
-            *value = data;
             block_map.iter().enumerate().for_each(|(bit_index, block)| {
                 let i = block.value();
-                let bit = match data {
-                    BusValue::Bit(b) => b,
+                let bit = match &data {
+                    BusValue::Bit(b) => *b,
+                    BusValue::U4(v) => ((v >> bit_index) & 1) != 0,
                     BusValue::U8(v) => ((v >> bit_index) & 1) != 0,
                     BusValue::U16(v) => ((v >> bit_index) & 1) != 0,
+                    BusValue::U32(v) => ((v >> bit_index) & 1) != 0,
+                    BusValue::U64(v) => ((v >> bit_index) & 1) != 0,
+                    BusValue::Bus((_, bus_data)) => {
+                        let byte_index = (bit_index / 8) as usize;
+                        let bit_in_byte = bit_index % 8;
+                        ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
+                    }
                 };
                 if bit {
                     self.state[i / 8] |= 1 << (i % 8);
@@ -122,6 +160,7 @@ impl<'a> Simulation<'a> {
                     self.state[i / 8] &= !(1 << (i % 8));
                 }
             });
+            *value = data;
         }
     }
     pub fn get_output(&self, label: Label<'a>) -> Option<&BusValue> {
@@ -228,18 +267,20 @@ impl<'a> Simulation<'a> {
                             BusValue::Bit(b) => {
                                 *b = bitdata;
                             }
-                            BusValue::U8(v) => {
+                            BusValue::U4(v) => set_bit!(v, index, bitdata),
+                            BusValue::U8(v) => set_bit!(v, index, bitdata),
+                            BusValue::U16(v) => set_bit!(v, index, bitdata),
+                            BusValue::U32(v) => set_bit!(v, index, bitdata),
+                            BusValue::U64(v) => set_bit!(v, index, bitdata),
+                            BusValue::Bus((_, data)) => {
                                 if bitdata {
-                                    *v |= 1 << index
-                                } else {
-                                    *v &= !(1 << index)
-                                }
-                            }
-                            BusValue::U16(v) => {
-                                if bitdata {
-                                    *v |= 1 << index
-                                } else {
-                                    *v &= !(1 << index)
+                                    let byte_index = i / 8;
+                                    let bit_in_byte = i % 8;
+                                    if bitdata {
+                                        data[byte_index] |= 1 << bit_in_byte;
+                                    } else {
+                                        data[byte_index] &= !(1 << bit_in_byte);
+                                    }
                                 }
                             }
                         }
@@ -275,18 +316,17 @@ impl<'a> Simulation<'a> {
                             let bit_index =
                                 block_bus.iter().position(|&x| x == BlockProxy::new(i))?;
                             Some(match value {
-                                BusValue::Bit(b) => *b,
-                                BusValue::U8(byte) => {
-                                    // println!(
-                                    //     "{:?} {:?} {:?}",
-                                    //     bit_index,
-                                    //     value,
-                                    //     (byte >> bit_index) & 1 != 0
-                                    // );
-                                    (byte >> bit_index) & 1 != 0
-                                },
-                                BusValue::U16(byte) => {
-                                    (byte >> bit_index) & 1 != 0
+                                BusValue::Bit(bit) => *bit,
+                                BusValue::U4(value) => (value >> bit_index) & 1 != 0,
+                                BusValue::U8(value) => (value >> bit_index) & 1 != 0,
+                                BusValue::U16(value) => (value >> bit_index) & 1 != 0,
+                                BusValue::U32(value) => (value >> bit_index) & 1 != 0,
+                                BusValue::U64(value) => (value >> bit_index) & 1 != 0,
+
+                                BusValue::Bus((_, bus_data)) => {
+                                    let byte_index = (bit_index / 8) as usize;
+                                    let bit_in_byte = bit_index % 8;
+                                    ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
                                 }
                             })
                         })

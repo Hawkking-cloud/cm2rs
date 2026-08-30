@@ -5,15 +5,15 @@ use cm2rs::{
 };
 
 fn main() {
-    let size = BusValue::U16(0).kind().width();
+    let size:usize = 16;
 
     let mut cb = CircuitBuilder::new();
 
-    let input1 = cb.add_input_bus((0, 0, 0), (0, 0, 1), BusValue::U16(321), "input2");
-    let input2 = cb.add_input_bus((1, 0, 0), (0, 0, 1), BusValue::U16(123), "input1");
+    let input1 = cb.add_input_bus((0, 0, 0), (0, 0, 1), BusValue::new_bus(size), "input1");
+    let input2 = cb.add_input_bus((1, 0, 0), (0, 0, 1),BusValue::new_bus(size), "input2");
     let input_cin = cb.add_input_bit((0,0,-2), "first_cin",BusValue::Bit(false));
 
-    let output1 = cb.add_output_bus((10, 0, 0), (0, 0, 1), BusKind::U16, "output1");
+    let output1 = cb.add_output_bus((10, 0, 0), (0, 0, 1), BusKind::Bus(size), "output1");
 
 
     for i in 0..size {
@@ -38,6 +38,9 @@ fn main() {
         cb.set_inputs(or1,vec![and1,and2]);
         cb.set_input(output1[i],xor2);
     }
+    // let block_len = cb.blocks.len();
+    // let cube_size = block_len/3/3/3;
+    
 
     // cb.wire_parallel(input1,output1);
 
@@ -48,7 +51,9 @@ fn main() {
     //     // }
     //     sim.tick();
     // }
-    println!("{:?}",cb.create_cm2());
+    // let _ = cb.create_cm2();
+    // println!("done");
+    println!("{}",cb.create_cm2());
     // still fluctuating
 
     // why is the output fluctating, need to prove less complicated circuits

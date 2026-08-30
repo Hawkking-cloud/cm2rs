@@ -225,8 +225,12 @@ impl<'a> CircuitBuilder<'a> {
                 out_bus.clone(),
                 match bus_kind {
                     BusKind::Bit=> BusValue::Bit(false),
+                    BusKind::U4 => BusValue::U4(0),
                     BusKind::U8 => BusValue::U8(0),
                     BusKind::U16 => BusValue::U16(0),
+                    BusKind::U32 => BusValue::U16(0),
+                    BusKind::U64 => BusValue::U16(0),
+                    BusKind::Bus(s) => BusValue::Bus((s,vec![0u8;s].into_boxed_slice())),
                 },
             ),
         ); // TODO: change to bus_value
@@ -332,18 +336,22 @@ impl<'a> CircuitBuilder<'a> {
         // resolve if is input and bit index of input value is true
         *block_type == Block::Input && 
         {
-            let (block_map,value)= self.input_hash.get(self.input_label_hash.get(&block_proxy).expect("invalid input data")).expect("invalid input data"); 
+            let (block_map,value) = self.input_hash.get(self.input_label_hash.get(&block_proxy).expect("invalid input data")).expect("invalid input data"); 
+            let bit_index = block_map.iter().position(|&proxy_i|proxy_i == *block_proxy).expect("invalid input data");
+            //TODO: dont compute this for bool
+
             match value {
                 BusValue::Bit(b) => *b,
-                BusValue::U8(v) => {
-                    let bit_index = block_map.iter().position(|&proxy_i|proxy_i == *block_proxy).expect("invalid input data");
-                    (v>>bit_index) &1 != 0
-                }
-                BusValue::U16(v) => {
-                    let bit_index = block_map.iter().position(|&proxy_i|proxy_i == *block_proxy).expect("invalid input data");
-                    (v>>bit_index) &1 != 0
-                }
-
+                BusValue::U4(v) => (v>>bit_index) &1 != 0,
+                BusValue::U8(v) => (v>>bit_index) &1 != 0,
+                BusValue::U16(v) => (v>>bit_index) &1 != 0,
+                BusValue::U32(v) => (v>>bit_index) &1 != 0,
+                BusValue::U64(v) => (v>>bit_index) &1 != 0,
+                    BusValue::Bus((_, bus_data)) => {
+                        let byte_index = (bit_index / 8) as usize;
+                        let bit_in_byte = bit_index % 8;
+                        ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
+                    },
             }
         };
         path.pop();
@@ -496,3 +504,4 @@ impl<'a> CircuitBuilder<'a> {
         })
     }
 }
+
