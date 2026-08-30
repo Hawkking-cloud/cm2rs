@@ -11,9 +11,10 @@ pub enum Op {
     Output = 2,
     NOR = 3,
     AND = 4,
-    OR = 5,
-    XOR = 6,
-    XNOR = 7,
+    NAND = 5,
+    OR = 6,
+    XOR = 7,
+    XNOR = 8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,8 +129,8 @@ impl<'a> Simulation<'a> {
             size: descriptor.size,
             state: descriptor.starting_state.clone().into_boxed_slice(),
             operations: descriptor.starting_operations.clone().into_boxed_slice(),
-            input_hash: descriptor.input_hash.clone(),
             input_table: input_table,
+            input_hash: descriptor.input_hash.clone(),
             input_label_hash: descriptor.input_label_hash.clone(),
             outputs: HashMap::new(),
             output_hash: descriptor.output_hash.clone(),
@@ -166,6 +167,9 @@ impl<'a> Simulation<'a> {
     pub fn get_output(&self, label: Label<'a>) -> Option<&BusValue> {
         Some(&self.output_hash.get(label).unwrap().1)
     }
+    pub fn print_output(&self, label: Label<'a>) {
+        println!("{:?}",&self.output_hash.get(label).unwrap().1);
+    }
 
     // input_table type = 0: #0's, 1: #1's
     pub fn tick(&mut self) {
@@ -201,21 +205,26 @@ impl<'a> Simulation<'a> {
         //     })
         //     .collect();
         //NOR OP
-        let mut nor_mask: Box<[u8]> = vec![0u8; self.size / 8].into_boxed_slice();
-        let mut and_mask: Box<[u8]> = vec![0u8; self.size / 8].into_boxed_slice();
-        let mut or_mask: Box<[u8]> = vec![0u8; self.size / 8].into_boxed_slice();
-        let mut xor_mask: Box<[u8]> = vec![0u8; self.size / 8].into_boxed_slice();
-        let mut xnor_mask: Box<[u8]> = vec![0u8; self.size / 8].into_boxed_slice();
+        let mask_size = self.size / 8;
+        let mut nor_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
+        let mut and_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
+        let mut nand_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
+        let mut or_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
+        let mut xor_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
+        let mut xnor_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
 
         for (i, op) in self.operations.iter().enumerate() {
+            if *op == Op::OR as u8 && input_table[i].1 != 0 {
+                or_mask[i / 8] |= 1 << (i % 8);
+            }
             if *op == Op::NOR as u8 && input_table[i].1 == 0 {
                 nor_mask[i / 8] |= 1 << ((i % 8) as u32);
             }
-            if *op == Op::AND as u8 && input_table[i].0 == 0 && input_table[i].1 != 0 {
+            if *op == Op::AND as u8 && input_table[i].0 == 0 {
                 and_mask[i / 8] |= 1 << (i % 8);
             }
-            if *op == Op::OR as u8 && input_table[i].1 != 0 {
-                or_mask[i / 8] |= 1 << (i % 8);
+            if *op == Op::NAND as u8 && input_table[i].0 != 0 {
+                nand_mask[i / 8] |= 1 << (i % 8); //TODO: implement nand starting state prediction
             }
             if *op == Op::XOR as u8 && input_table[i].1 % 2 != 0 {
                 xor_mask[i / 8] |= 1 << (i % 8);
@@ -274,8 +283,8 @@ impl<'a> Simulation<'a> {
                             BusValue::U64(v) => set_bit!(v, index, bitdata),
                             BusValue::Bus((_, data)) => {
                                 if bitdata {
-                                    let byte_index = i / 8;
-                                    let bit_in_byte = i % 8;
+                                    let byte_index = index / 8;
+                                    let bit_in_byte = index % 8;
                                     if bitdata {
                                         data[byte_index] |= 1 << bit_in_byte;
                                     } else {
@@ -339,7 +348,7 @@ impl<'a> Simulation<'a> {
         }
 
         self.state.iter_mut().enumerate().for_each(|(i, b)| {
-            *b = (*b ^ nor_mask[i] ^ and_mask[i] ^ xor_mask[i] ^ xnor_mask[i]) | or_mask[i]
+            *b = (*b ^ nor_mask[i] ^ and_mask[i] ^ nand_mask[i] ^ xor_mask[i] ^ xnor_mask[i]) | or_mask[i]
         });
         // for (i, op) in self.operations.iter().enumerate() {
         //     if *op == Op::Debug as u8 {

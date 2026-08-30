@@ -4,10 +4,11 @@ use std::collections::HashMap;
 
 use crate::sim::{BusKind, BusValue, Label, Op, Simulation, SimulationDescriptor};
 
-#[derive(PartialEq)]
+#[derive(Copy,Clone,PartialEq)]
 pub enum Block {
     NOR,
     AND,
+    NAND,
     OR,
     XOR,
     XNOR,
@@ -20,6 +21,7 @@ impl Block {
         let op = match self {
             Block::NOR => Op::NOR,
             Block::AND => Op::AND,
+            Block::NAND => Op::NAND,
             Block::OR => Op::OR,
             Block::XOR => Op::XOR,
             Block::XNOR => Op::XNOR,
@@ -131,7 +133,8 @@ impl<'a> CircuitBuilder<'a> {
     where
         P: IntoBlockPosition,
     {
-        let position: BlockPosition = position.into_pos();
+          let position:BlockPosition = position.into_pos();
+
         let index = self.blocks.len();
         self.blocks.push(BlockData {
             r#type: r#type,
@@ -144,7 +147,6 @@ impl<'a> CircuitBuilder<'a> {
     }
     pub fn add_input_bit<P:IntoBlockPosition>(&mut self, position: P, label: Label<'a>, value:BusValue) -> BlockProxy {
         let position:BlockPosition = position.into_pos();
-        let position:(f32,f32,f32) = (-position.0,position.1,position.2);
          let block = self.add_block(position,Block::Input);
         self.input_label_hash.insert(block,label);
         self.input_hash.insert(label, (Box::new([block.clone()]), value));
@@ -154,19 +156,49 @@ impl<'a> CircuitBuilder<'a> {
     where
         P: IntoBlockPosition + Copy,
     {
-        let index = self.blocks.len();
-        self.blocks.push(BlockData {
-            r#type: Block::Output,
-            position: position.into_pos(),
-          inputs: Vec::new(),
-        });
-        self.output_hash.insert(
-            label,
-            (Box::new([BlockProxy::new(index)]), BusValue::Bit(false)),
-        );
-        self.block_registry
-            .insert(position.into_pos().into_key(), BlockProxy::new(index));
-        BlockProxy(index)
+        let position:BlockPosition = position.into_pos();
+         let block = self.add_block(position,Block::Output);
+        self.output_label_hash.insert(block,label);
+        self.output_hash.insert(label, (Box::new([block.clone()]), BusValue::Bit(false) ));
+        block
+
+        //
+        // let index = self.blocks.len();
+        // self.blocks.push(BlockData {
+        //     r#type: Block::Output,
+        //     position: position.into_pos(),
+        //   inputs: Vec::new(),
+        // });
+        // self.output_hash.insert(
+        //     label,
+        //     (Box::new([BlockProxy::new(index)]), BusValue::Bit(false)),
+        // );
+        // self.block_registry
+        //     .insert(position.into_pos().into_key(), BlockProxy::new(index));
+        // BlockProxy(index)
+    }
+    pub fn add_operator_bus(
+        &mut self,
+        position: impl IntoBlockPosition,
+        inc: (i32,i32,i32),
+        bus_kind: BusKind,
+        operator: Block,
+    ) -> Box<[BlockProxy]> {
+        let position: BlockPosition = position.into_pos();
+        let mut out_bus: Box<[BlockProxy]> =
+            vec![BlockProxy::new(0); bus_kind.width()].into_boxed_slice();
+
+        for i in 0..bus_kind.width() {
+            let index_position = (
+                position.0 + (inc.0 * i as i32) as f32,
+                position.1 + (inc.1 * i as i32) as f32,
+                position.2 + (inc.2 * i as i32) as f32,
+            );
+            out_bus[i] = self.add_block(index_position, operator);
+        }
+
+                out_bus
+
     }
     pub fn add_input_bus(
         &mut self,
@@ -230,7 +262,7 @@ impl<'a> CircuitBuilder<'a> {
                     BusKind::U16 => BusValue::U16(0),
                     BusKind::U32 => BusValue::U16(0),
                     BusKind::U64 => BusValue::U16(0),
-                    BusKind::Bus(s) => BusValue::Bus((s,vec![0u8;s].into_boxed_slice())),
+                    BusKind::Bus(s) => BusValue::Bus((s,vec![0u8;s.div_ceil(8)].into_boxed_slice())),
                 },
             ),
         ); // TODO: change to bus_value
@@ -249,6 +281,20 @@ impl<'a> CircuitBuilder<'a> {
             .expect("invalid block1 argument")
             .inputs = inputs;
     }
+        pub fn add_input(&mut self, block1: BlockProxy, block2: BlockProxy) {
+        self.blocks
+            .get_mut(block1.value())
+            .expect("block1 invalid")
+            .inputs
+            .push(block2);
+    }
+    pub fn add_inputs(&mut self, block1: BlockProxy, mut inputs: Vec<BlockProxy>) {
+        self.blocks
+            .get_mut(block1.value())
+            .expect("block1 invalid")
+            .inputs
+            .append(&mut inputs);
+    }
     pub fn set_output(&mut self, block1: BlockProxy, block2: BlockProxy) {
         self.blocks
             .get_mut(block2.value())
@@ -263,22 +309,18 @@ impl<'a> CircuitBuilder<'a> {
                 .inputs = vec![block1];
         });
     }
-    pub fn add_input(&mut self, block1: BlockProxy, block2: BlockProxy) {
+    pub fn add_output(&mut self, block1: BlockProxy, block2: BlockProxy) {
         self.blocks
-            .get_mut(block1.value())
-            .expect("block1 invalid")
+            .get_mut(block2.value())
+            .expect("block2 invalid")
             .inputs
-            .push(block2);
+            .push(block1);
     }
-    pub fn add_inputs(&mut self, block1: BlockProxy, mut inputs: Vec<BlockProxy>) {
-        self.blocks
-            .get_mut(block1.value())
-            .expect("block1 invalid")
-            .inputs
-            .append(&mut inputs);
+    pub fn add_outputs(&mut self, block1: BlockProxy, outputs: Vec<BlockProxy>) {
+        outputs.iter().for_each(|proxy|self.blocks.get_mut(proxy.value()).expect("invalid block in outputs").inputs.push(block1));
     }
 
-    pub fn wire_parallel(&mut self, bus1: Box<[BlockProxy]>, bus2: Box<[BlockProxy]>) {
+    pub fn wire_parallel(&mut self, bus1: Box<[BlockProxy]>, bus2: &Box<[BlockProxy]>) {
         bus2.iter().enumerate().for_each(|(i, block)| {
             self.blocks
                 .get_mut(block.value())
@@ -375,6 +417,7 @@ impl<'a> CircuitBuilder<'a> {
             buf.push_str(match block_type {
                 Block::NOR => "0,",
                 Block::AND => "1,",
+                Block::NAND => "10,",
                 Block::OR => "2,",
                 Block::XOR => "3,",
                 Block::XNOR => "11,",
