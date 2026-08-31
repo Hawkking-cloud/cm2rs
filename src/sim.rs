@@ -42,7 +42,7 @@ impl BusKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum BusValue {
     Bit(bool),
     U4(u8), //TODO: maybe do something about this
@@ -53,9 +53,37 @@ pub enum BusValue {
     Bus((usize, Box<[u8]>)),
 }
 
+pub trait ToBusBytes {
+    fn to_ne_bytes_vec(self) -> Vec<u8>;
+}
+
+macro_rules! impl_to_bus_bytes {
+    ($($t:ty),*) => {
+        $(
+            impl ToBusBytes for $t {
+                fn to_ne_bytes_vec(self) -> Vec<u8> {
+                    self.to_ne_bytes().to_vec()
+                }
+            }
+        )*
+    };
+}
+
+impl_to_bus_bytes!(u8, u16, u32, u64, u128, usize);
+
 impl BusValue {
-    pub fn new_bus(size: usize) -> Self {
-        BusValue::Bus((size, vec![0u8; size].into_boxed_slice()))
+    pub fn new_bus(size: usize, mut start_data: Vec<u8>) -> Self {
+        start_data.resize(size.div_ceil(8), 0u8);
+        BusValue::Bus((size, start_data.into_boxed_slice()))
+    }
+
+    pub fn from_size(size: usize) -> Self {
+        BusValue::Bus((size, vec![0u8; size.div_ceil(8)].into_boxed_slice()))
+    }
+
+    pub fn from_uint<T: ToBusBytes>(size: usize, val: T) -> Self {
+        let bytes = val.to_ne_bytes_vec();
+        BusValue::new_bus(size, bytes)
     }
 
     pub fn kind(&self) -> BusKind {
@@ -164,25 +192,128 @@ impl<'a> Simulation<'a> {
             *value = data;
         }
     }
+    pub fn verify_input(&self, label: Label<'a>, desired_value: BusValue) -> bool {
+        desired_value == self.input_hash.get(label).expect("invalid input label").1.clone()
+    }
+
     pub fn get_output(&self, label: Label<'a>) -> Option<&BusValue> {
         Some(&self.output_hash.get(label).unwrap().1)
     }
     pub fn print_output(&self, label: Label<'a>) {
-        println!("{:?}",&self.output_hash.get(label).unwrap().1);
+        println!("{:?}", &self.output_hash.get(label).unwrap().1);
+    }
+    pub fn print_output_uint(&self, label: Label<'a>) {
+        if let BusValue::Bus((_, data)) = self.get_output(label).unwrap() {
+            let mut digits: Vec<u8> = vec![0];
+
+            for &byte in data.iter().rev() {
+                let mut carry = byte as u32;
+                for d in digits.iter_mut() {
+                    let val = *d as u32 * 256 + carry;
+                    *d = (val % 10) as u8;
+                    carry = val / 10;
+                }
+                while carry > 0 {
+                    digits.push((carry % 10) as u8);
+                    carry /= 10;
+                }
+            }
+
+            while digits.len() > 1 && *digits.last().unwrap() == 0 {
+                digits.pop();
+            }
+
+            println!(
+                "{}",
+                digits
+                    .iter()
+                    .rev()
+                    .map(|d| (d + b'0') as char)
+                    .collect::<String>()
+            );
+        }
+    }
+
+    pub fn tick_until_stable(&mut self, label: Label<'a>, max_iterations: usize, trend_count: usize) {
+        let mut last_value: BusValue = self
+            .get_output(label)
+            .expect("invalid output label")
+            .clone();
+        let mut stable_trend: usize = 0;
+        let mut num_iterations: usize = 0;
+        for i in 0..max_iterations {
+            self.tick();
+            let current_value: &BusValue = self.get_output(label).expect("invalid output label");
+            if last_value == *current_value {
+                stable_trend += 1;
+            } else {
+                stable_trend = 0;
+            }
+            if stable_trend > trend_count{
+                num_iterations = i + 1;
+                break;
+            }
+            last_value = current_value.clone();
+        }
+        if stable_trend <= trend_count{
+            println!("[{:?}] max_iterations hit: {}",label, max_iterations);
+        } else {
+            println!("[ {:#?} ]: stable after {} iterations",label, num_iterations);
+        }
     }
 
     // input_table type = 0: #0's, 1: #1's
     pub fn tick(&mut self) {
         self.outputs.clear();
-        //TODO: init every other hashmaps
-
         // rewritten
+        // let input_table: Vec<(usize, usize)> = self
+        //     .input_table
+        //     .iter()
+        //     .map(|inputs| {
+        //         inputs.iter().fold((0usize, 0usize), |(inact, act), &b| {
+        //             let state = ((self.state[b / 8] >> (b % 8)) & 1) == 1;
+        //             if state {
+        //                 (inact, act + 1)
+        //             } else {
+        //                 (inact + 1, act)
+        //             }
+        //         })
+        //     })
+        //     .collect();
+
+        // rewrite to override input blocks with bus value bit index bool
         let input_table: Vec<(usize, usize)> = self
             .input_table
             .iter()
             .map(|inputs| {
                 inputs.iter().fold((0usize, 0usize), |(inact, act), &b| {
-                    let state = ((self.state[b / 8] >> (b % 8)) & 1) == 1;
+                    let state = if self.operations[b] == Op::Input as u8 {
+                        let input_label = self
+                            .input_label_hash
+                            .get(&BlockProxy::new(b))
+                            .expect("invalid input");
+                        let (block_map, bus_value) =
+                            self.input_hash.get(input_label).expect("invalid input");
+                        let bit_index = block_map
+                            .iter()
+                            .position(|&idx_block| idx_block.value() == b)
+                            .unwrap();
+
+                        if let BusValue::Bus((_, value)) = bus_value {
+                            static mut I: u32 = 1;
+                            unsafe {
+                                I += 1;
+                                if I % 8 == 0 {
+                                }
+                            }
+
+                            ((value[bit_index / 8] >> (bit_index % 8)) & 1) == 1
+                        } else {
+                            false
+                        }
+                    } else {
+                        ((self.state[b / 8] >> (b % 8)) & 1) == 1
+                    };
                     if state {
                         (inact, act + 1)
                     } else {
@@ -191,20 +322,7 @@ impl<'a> Simulation<'a> {
                 })
             })
             .collect();
-        // let input_table: Vec<(usize, usize)> = self
-        //     .input_table
-        //     .iter()
-        //     .map(|i| {
-        //         i.iter().fold((0usize, 0usize), |(acc_zero, acc_one), &p| {
-        //             let block_state = (self.state[p / 8] >> ((p % 8) as u32)) & 1 == 1;
-        //             (
-        //                 acc_zero + (!block_state as usize),
-        //                 acc_one + (block_state as usize),
-        //             )
-        //         })
-        //     })
-        //     .collect();
-        //NOR OP
+
         let mask_size = self.size / 8;
         let mut nor_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
         let mut and_mask: Box<[u8]> = vec![0u8; mask_size].into_boxed_slice();
@@ -218,13 +336,13 @@ impl<'a> Simulation<'a> {
                 or_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::NOR as u8 && input_table[i].1 == 0 {
-                nor_mask[i / 8] |= 1 << ((i % 8) as u32);
+                nor_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::AND as u8 && input_table[i].0 == 0 {
                 and_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::NAND as u8 && input_table[i].0 != 0 {
-                nand_mask[i / 8] |= 1 << (i % 8); //TODO: implement nand starting state prediction
+                nand_mask[i / 8] |= 1 << (i % 8); 
             }
             if *op == Op::XOR as u8 && input_table[i].1 % 2 != 0 {
                 xor_mask[i / 8] |= 1 << (i % 8);
@@ -233,9 +351,6 @@ impl<'a> Simulation<'a> {
                 xnor_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::Output as u8 {
-                // figure out if this is recieving any true input bits
-                // dbg!(&input_table[i]);
-                // its a circuit wiring issue
                 //TODO: OPTIMIZE THIS
 
                 // treat as or gate
@@ -315,13 +430,14 @@ impl<'a> Simulation<'a> {
             }
             if *op == Op::Input as u8 {
                 // dbg!(&input_table[i]);
-                let bitdata: bool = (input_table[i].1 != 0)
-                    || self
-                        .input_label_hash
+                // input label hash is correct
+                let bitdata: bool = 
+                        self.input_label_hash
                         .get(&BlockProxy::new(i))
                         .and_then(|label| {
                             // println!("{:?}",label);
                             let (block_bus, value) = self.input_hash.get(label).unwrap();
+                            // value here is correct
                             let bit_index =
                                 block_bus.iter().position(|&x| x == BlockProxy::new(i))?;
                             Some(match value {
@@ -332,6 +448,7 @@ impl<'a> Simulation<'a> {
                                 BusValue::U32(value) => (value >> bit_index) & 1 != 0,
                                 BusValue::U64(value) => (value >> bit_index) & 1 != 0,
 
+                                // correct output bits
                                 BusValue::Bus((_, bus_data)) => {
                                     let byte_index = (bit_index / 8) as usize;
                                     let bit_in_byte = bit_index % 8;
@@ -348,7 +465,12 @@ impl<'a> Simulation<'a> {
         }
 
         self.state.iter_mut().enumerate().for_each(|(i, b)| {
-            *b = (*b ^ nor_mask[i] ^ and_mask[i] ^ nand_mask[i] ^ xor_mask[i] ^ xnor_mask[i]) | or_mask[i]
+            *b = (*b ^ xnor_mask[i])
+                | or_mask[i]
+                | nor_mask[i]
+                | and_mask[i]
+                | xor_mask[i]
+                | nand_mask[i]
         });
         // for (i, op) in self.operations.iter().enumerate() {
         //     if *op == Op::Debug as u8 {

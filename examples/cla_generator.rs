@@ -4,16 +4,15 @@ use cm2rs::{
 };
 
 fn main() {
-    let size: usize = 6;
+    let size: usize = 16;
 
     let mut cb = CircuitBuilder::new();
 
-    let start_in1 = vec![3u8.reverse_bits()];
-    let start_in2 = vec![5u8.reverse_bits()];
+    // let start_in1: u64 = 12345678;
+    // let start_in2: u64 = 87654321;
 
-
-    let input1 = cb.add_input_bus((-1, 1, 0), (0, 0, 1), BusValue::Bus((size,start_in1.into_boxed_slice())), "in1");
-    let input2 = cb.add_input_bus((-1, 0, 0), (0, 0, 1), BusValue::Bus((size,start_in2.into_boxed_slice())), "in2");
+    let input1 = cb.add_input_bus((-1, 1, 0), (0, 0, 1), BusValue::from_size(size), "in1");
+    let input2 = cb.add_input_bus((-1, 0, 0), (0, 0, 1), BusValue::from_size(size), "in2");
     let cin = cb.add_input_bit((-1, 0, -1), "cin", BusValue::Bit(false));
 
     let output1 = cb.add_output_bus((3 + size + 3, 0, 0), (0, 0, 1), BusKind::Bus(size), "out");
@@ -93,20 +92,21 @@ fn main() {
 
     let mut sim = cb.create_sim();
 
-    for _ in 0..9 {
-        sim.tick();
-    }
+    for a in 0..4 {
+        for b in 0..4 {
+            let ina = a;
+            let inb = b;
+            // why is set_input not applying logic changes immediately
+            sim.set_input("in1", BusValue::from_uint(size, a as u8));
+            sim.set_input("in2", BusValue::from_uint(size, b as u8));
 
-    // println!("{:?}",sim.get_output("out"));
-    if let BusValue::Bus((_, data)) = sim.get_output("out").unwrap() {
-        let n = data.len();
-        if n == 0 || n > 8 {
-            println!("{:?}", data);
-            return;
+            assert!(sim.verify_input("in1", BusValue::from_uint(size, a as u8)));
+
+            sim.tick_until_stable("out", 50, 5);
+
+            println!("{} + {} = ", ina, inb);
+            sim.print_output_uint("out");
         }
-        let mut buf = [0u8; 8];
-        buf[..n].copy_from_slice(data);
-        println!("{}", u64::from_le_bytes(buf));
     }
 
     // println!("{}", cb.create_cm2());

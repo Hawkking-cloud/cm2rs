@@ -5,90 +5,53 @@ use cm2rs::{
 };
 
 fn main() {
-    let size:usize = 16;
+    let size: usize = 512;
 
     let mut cb = CircuitBuilder::new();
 
-    let input1 = cb.add_input_bus((0, 0, 0), (0, 0, 1), BusValue::new_bus(size), "input1");
-    let input2 = cb.add_input_bus((1, 0, 0), (0, 0, 1),BusValue::new_bus(size), "input2");
-    let input_cin = cb.add_input_bit((0,0,-2), "first_cin",BusValue::Bit(false));
+    let input1 = cb.add_input_bus((0, 0, 0), (0, 0, 1), BusValue::from_size(size), "in1");
+    let input2 = cb.add_input_bus((1, 0, 0), (0, 0, 1), BusValue::from_size(size), "in2");
+    let input_cin = cb.add_input_bit((0, 0, -2), "first_cin", BusValue::Bit(false));
 
-    let output1 = cb.add_output_bus((10, 0, 0), (0, 0, 1), BusKind::Bus(size), "output1");
-
+    let output = cb.add_output_bus((10, 0, 0), (0, 0, 1), BusKind::Bus(size), "out");
 
     for i in 0..size {
         let y: f32 = i as f32;
-        // full adder
+
         let xor1 = cb.add_block((2, 0, y), Block::XOR);
         cb.set_inputs(xor1, vec![input1[i], input2[i]]);
+
         let and1 = cb.add_block((3, 0, y), Block::AND);
         cb.set_inputs(and1, vec![input1[i], input2[i]]);
-        let xor2 = cb.add_block((4, 0, y), Block::XOR);         
+
+        let xor2 = cb.add_block((4, 0, y), Block::XOR);
+        cb.set_output(xor2, output[i]);
+
         let and2 = cb.add_block((5, 0, y), Block::AND);
+
         let cin = if i == 0 {
             input_cin
         } else {
             let ret = cb.position_hash((6, 0, y - 1.0)).unwrap();
-            // dbg!(cb.blocks.get(ret.value()).unwrap().position);
             ret
         };
+
         cb.set_inputs(and2, vec![xor1, cin]);
         cb.set_inputs(xor2, vec![xor1, cin]);
+
         let or1 = cb.add_block((6, 0, y), Block::OR);
-        cb.set_inputs(or1,vec![and1,and2]);
-        cb.set_input(output1[i],xor2);
+        cb.set_inputs(or1, vec![and1, and2]);
+
     }
-    // let block_len = cb.blocks.len();
-    // let cube_size = block_len/3/3/3;
-    
 
-    // cb.wire_parallel(input1,output1);
+    let mut sim = cb.create_sim();
 
-    // let mut sim = cb.create_sim();
-    // for i in 0..127 {
-    //     // if true {
-    //     //     println!("{:?}", sim.get_output("output1"));
-    //     // }
-    //     sim.tick();
-    // }
-    // let _ = cb.create_cm2();
-    // println!("done");
-    println!("{}",cb.create_cm2());
-    // still fluctuating
 
-    // why is the output fluctating, need to prove less complicated circuits
+    sim.set_input("in1", BusValue::from_uint(size,101u64));
+    sim.set_input("in2", BusValue::from_uint(size,27u64));
 
-    // println!("{:?}", sim.get_output("output1"));
+    sim.tick_until_stable("out", 1000,4);
 
-    // 2 u8 input AND bus operator with output
-    // let mut cb = CircuitBuilder::new();
-    //
-    // let input1 = cb.add_input_bus((0, 0, 0), (1, 0, 0), BusValue::U8(0b01100110), "input1");
-    // let input2 = cb.add_input_bus((9, 0, 0), (1, 0, 0), BusValue::U8(0b11001100), "input2");
-    //
-    // let output1 = cb.add_output_bus((0, 4, 0), (1, 0, 0), BusKind::U8, "output1");
-    //
-    // for i in 0..8 {
-    //     let and = cb.add_block((i, 2, 0), Block::XOR);
-    //     cb.set_inputs(and, vec![input1[i], input2[i]]);
-    //     cb.set_output(and, output1[i]);
-    // }
-    //
-    // let mut sim = cb.create_sim();
-    // for i in 0..(255 / 8) {
-    //     let in1 = i * 8;
-    //     let in2 = i * 8 / 3;
-    //     // inputs arent updated in one tick
-    //     sim.set_input("input1", BusValue::U8(in1));
-    //     sim.set_input("input2", BusValue::U8(in2));
-    //     sim.tick();
-    //     sim.tick(); // 2 ticks to update the input
-    //     println!(
-    //         "input1: {} input2: {} output1: {:?}",
-    //         in1,
-    //         in2,
-    //         sim.get_output("output1")
-    //     );
-    // }
-    // dbg!(sim.get_output("output1"));
+    sim.print_output_uint("out");
+    sim.print_output("out");
 }

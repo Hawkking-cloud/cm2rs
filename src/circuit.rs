@@ -342,7 +342,10 @@ impl<'a> CircuitBuilder<'a> {
         self.blocks.get(block_proxy.value())
     }
     fn solve_starting_state(&self, path: &mut Vec<BlockProxy>, map: &mut HashMap<BlockProxy,bool>,block_proxy: &BlockProxy) -> bool {
-
+        // this function has the bug
+        // why does OR resolve starting state to 1
+        
+        // cache not getting his on OR resolve, not apart of the issue
         if let Some(&cached) = map.get(block_proxy) {
             return cached;
         }
@@ -365,7 +368,11 @@ impl<'a> CircuitBuilder<'a> {
         *block_type == Block::AND && {
             !block.inputs.iter().any(|proxy_i|!self.solve_starting_state(path, map, proxy_i))
         } ||
-        *block_type == Block::OR || *block_type == Block::Output && {
+        *block_type == Block::NAND && {
+            block.inputs.iter().any(|proxy_i|!self.solve_starting_state(path, map, proxy_i))
+        } ||
+        (*block_type == Block::OR || *block_type == Block::Output) && {
+
             block.inputs.iter().any(|proxy_i|self.solve_starting_state(path,map,proxy_i))
         } ||
         *block_type == Block::XOR && {
@@ -392,6 +399,7 @@ impl<'a> CircuitBuilder<'a> {
                     BusValue::Bus((_, bus_data)) => {
                         let byte_index = (bit_index / 8) as usize;
                         let bit_in_byte = bit_index % 8;
+                        // good data
                         ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
                     },
             }
