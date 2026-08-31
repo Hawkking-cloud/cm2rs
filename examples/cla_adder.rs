@@ -3,6 +3,8 @@ use cm2rs::{
     sim::{BusKind, BusValue},
 };
 
+
+//TODO: rename these to the actual proper logic gate names
 fn main() {
     let size: usize = 16;
 
@@ -13,7 +15,7 @@ fn main() {
 
     let input1 = cb.add_input_bus((-1, 1, 0), (0, 0, 1), BusValue::from_size(size), "in1");
     let input2 = cb.add_input_bus((-1, 0, 0), (0, 0, 1), BusValue::from_size(size), "in2");
-    let cin = cb.add_input_bit((-1, 0, -1), "cin", BusValue::Bit(false));
+    let cin = cb.add_input_bit((-1, 0, -1), BusValue::Bit(false), "cin");
 
     let output1 = cb.add_output_bus((3 + size + 3, 0, 0), (0, 0, 1), BusKind::Bus(size), "out");
 
@@ -51,14 +53,8 @@ fn main() {
                 let jdx_in_nor = cb
                     .position_hash((1, 0, (i as i32) - (j as i32) - 2))
                     .unwrap();
-                // let jdx_in_xor = match i - j { // correct
-                //     1 => cin_nor,
-                //     _ => last_input_nor,
-                // };
-                cb.add_input(jdx_and, jdx_in_nor); // correct
+                cb.add_input(jdx_and, jdx_in_nor);
                 for l in 0..=j {
-                    // let ldx_inp_nand = cb.position_hash((2, 0, i - l-1)).unwrap();
-                    // let ldx_inp = cb.position_hash((2, 0, i)).unwrap();
                     let ldx_inp = cb.position_hash((2, 0, i - l - 1)).unwrap();
                     cb.add_input(jdx_and, ldx_inp);
                 }
@@ -75,7 +71,7 @@ fn main() {
     cb.add_input(cout_nor, final_input_nor);
     cb.add_output(cout_nor, cout);
 
-    // second pass for cout
+    // second pass for cout 
 
     for i in 0..size {
         let jdx_and = cb.add_block((3 + i, 0, size), Block::AND);
@@ -90,6 +86,10 @@ fn main() {
         }
     }
 
+    println!("{}", cb.create_cm2());
+
+
+    /*
     let schematic = cb.make_sim_schematic();
 
     let mut sim = cb.create_sim();
@@ -97,6 +97,7 @@ fn main() {
     sim.tick_until_stable("out", 500, 5);
 
     println!("{}",sim.snapshot_cm2(schematic));
+    */
 
-    // println!("{}", cb.create_cm2());
 }
+

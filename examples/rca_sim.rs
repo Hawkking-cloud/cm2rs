@@ -11,7 +11,7 @@ fn main() {
 
     let input1 = cb.add_input_bus((0, 0, 0), (0, 0, 1), BusValue::from_size(size), "in1");
     let input2 = cb.add_input_bus((1, 0, 0), (0, 0, 1), BusValue::from_size(size), "in2");
-    let input_cin = cb.add_input_bit((0, 0, -2), "first_cin", BusValue::Bit(false));
+    let input_cin = cb.add_input_bit((0, 0, -2),  BusValue::Bit(false), "first_cin");
 
     let output = cb.add_output_bus((10, 0, 0), (0, 0, 1), BusKind::Bus(size), "out");
 
@@ -32,8 +32,7 @@ fn main() {
         let cin = if i == 0 {
             input_cin
         } else {
-            let ret = cb.position_hash((6, 0, y - 1.0)).unwrap();
-            ret
+            cb.position_hash((6, 0, y - 1.0)).unwrap()
         };
 
         cb.set_inputs(and2, vec![xor1, cin]);
@@ -46,11 +45,10 @@ fn main() {
 
     let mut sim = cb.create_sim();
 
-
     sim.set_input("in1", BusValue::from_uint(size,101u64));
     sim.set_input("in2", BusValue::from_uint(size,27u64));
 
-    sim.tick_until_stable("out", 1000,4);
+    sim.tick_until_stable("out", 1000,5);
 
     sim.print_output_uint("out");
     sim.print_output("out");

@@ -1,4 +1,5 @@
 // sim.rs
+#![allow(clippy::manual_is_multiple_of)] // shutup lsp
 
 use std::collections::HashMap;
 
@@ -37,7 +38,7 @@ impl BusKind {
             BusKind::U16 => 16,
             BusKind::U32 => 32,
             BusKind::U64 => 64,
-            BusKind::Bus(size) => *size as usize,
+            BusKind::Bus(size) => *size,
         }
     }
 }
@@ -99,6 +100,12 @@ impl BusValue {
     }
 }
 
+pub struct SnapshotInfo<'a> {
+    pub location_hash:HashMap<usize,(f32,f32,f32)>,
+    pub input_map:HashMap<usize,(Box<[usize]>,Label<'a>)>,
+    pub output_map:HashMap<usize,(Box<[usize]>,Label<'a>)>,
+}
+
 pub type Label<'a> = &'a str;
 
 pub struct Simulation<'a> {
@@ -157,7 +164,7 @@ impl<'a> Simulation<'a> {
             size: descriptor.size,
             state: descriptor.starting_state.clone().into_boxed_slice(),
             operations: descriptor.starting_operations.clone().into_boxed_slice(),
-            input_table: input_table,
+            input_table,
             input_hash: descriptor.input_hash.clone(),
             input_label_hash: descriptor.input_label_hash.clone(),
             outputs: HashMap::new(),
@@ -178,7 +185,7 @@ impl<'a> Simulation<'a> {
                     BusValue::U32(v) => ((v >> bit_index) & 1) != 0,
                     BusValue::U64(v) => ((v >> bit_index) & 1) != 0,
                     BusValue::Bus((_, bus_data)) => {
-                        let byte_index = (bit_index / 8) as usize;
+                        let byte_index = bit_index / 8;
                         let bit_in_byte = bit_index % 8;
                         ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
                     }
@@ -193,7 +200,13 @@ impl<'a> Simulation<'a> {
         }
     }
     pub fn verify_input(&self, label: Label<'a>, desired_value: BusValue) -> bool {
-        desired_value == self.input_hash.get(label).expect("invalid input label").1.clone()
+        desired_value
+            == self
+                .input_hash
+                .get(label)
+                .expect("invalid input label")
+                .1
+                .clone()
     }
 
     pub fn get_output(&self, label: Label<'a>) -> Option<&BusValue> {
@@ -233,8 +246,61 @@ impl<'a> Simulation<'a> {
             );
         }
     }
+    
+    pub fn snapshot_cm2(
+        &mut self,
+        info:SnapshotInfo,
+    ) -> String {
+        let mut buf = String::new();
+        self.operations.iter().enumerate().for_each(|(i,op)|{
+            let block_state = ((self.state[i/8] >> (i%8)) & 1) != 0;
+            let (x,y,z)= info.location_hash.get(&i).expect("invalid snapshot info");
 
-    pub fn tick_until_stable(&mut self, label: Label<'a>, max_iterations: usize, trend_count: usize) {
+            buf.push_str(
+                match op {
+                    1 => "0,",
+                    2 => "15,",
+                    3 => "0,",
+                    4 => "1,",
+                    5 => "10,",
+                    6 => "2,",
+                    7 => "3,",
+                    8 => "11,",
+                    _ => "15,"
+
+                }
+            );
+            buf.push_str(
+                if block_state {
+                    "0,"
+                } else {
+                    "1,"
+                }
+            );
+            buf.push_str(&format!("{},{},{},;",x,y,z));
+        });
+        if !self.operations.is_empty() {
+            buf.pop();
+        }
+        buf.push('?');
+        self.input_table.iter().enumerate().for_each(|(i,from)|{
+            buf.push_str(&format!("{:?},{:?};",from,i));
+        });
+        if !self.input_table.is_empty() {
+            buf.pop();
+        }
+        buf.push_str("??");
+
+
+        buf
+    }
+
+    pub fn tick_until_stable(
+        &mut self,
+        label: Label<'a>,
+        max_iterations: usize,
+        trend_count: usize,
+    ) {
         let mut last_value: BusValue = self
             .get_output(label)
             .expect("invalid output label")
@@ -249,16 +315,19 @@ impl<'a> Simulation<'a> {
             } else {
                 stable_trend = 0;
             }
-            if stable_trend > trend_count{
+            if stable_trend > trend_count {
                 num_iterations = i + 1;
                 break;
             }
             last_value = current_value.clone();
         }
-        if stable_trend <= trend_count{
-            println!("[{:?}] max_iterations hit: {}",label, max_iterations);
+        if stable_trend <= trend_count {
+            println!("[{:?}] max_iterations hit: {}", label, max_iterations);
         } else {
-            println!("[ {:#?} ]: stable after {} iterations",label, num_iterations);
+            println!(
+                "[ {:#?} ]: stable after {} iterations",
+                label, num_iterations
+            );
         }
     }
 
@@ -303,8 +372,7 @@ impl<'a> Simulation<'a> {
                             static mut I: u32 = 1;
                             unsafe {
                                 I += 1;
-                                if I % 8 == 0 {
-                                }
+                                if I % 8 == 0 {}
                             }
 
                             ((value[bit_index / 8] >> (bit_index % 8)) & 1) == 1
@@ -342,7 +410,7 @@ impl<'a> Simulation<'a> {
                 and_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::NAND as u8 && input_table[i].0 != 0 {
-                nand_mask[i / 8] |= 1 << (i % 8); 
+                nand_mask[i / 8] |= 1 << (i % 8);
             }
             if *op == Op::XOR as u8 && input_table[i].1 % 2 != 0 {
                 xor_mask[i / 8] |= 1 << (i % 8);
@@ -364,64 +432,62 @@ impl<'a> Simulation<'a> {
                 let bitdata = input_table[i].1 != 0; // OR
                 // println!("{:?} 0's | {:?} 1's",input_table[i].0,input_table[i].1);
                 // this isnt getting input from Op::Input
-                if let Some(label) = self.output_label_hash.get(&BlockProxy::new(i)) {
-                    if let Some((block_bus, bus_value)) = self.output_hash.get_mut(label) {
-                        // dbg!();
-                        //left off here
-                        //why are output bus's not recieving correct input data from input busses
-                        //input:op in sim.rs confirmed working
-                        //guessing the bug is here
-                        // this is directly true because of the starting_state calculation
-                        // correct effect, wrong data
-                        // dbg!(&input_table[i]); // input_table is never (0,1) for some reason
-                        //   rewrite input_table logic
-                        //   rewrite operation input logic
+                if let Some(label) = self.output_label_hash.get(&BlockProxy::new(i))
+                    && let Some((block_bus, bus_value)) = self.output_hash.get_mut(label)
+                {
+                    // dbg!();
+                    //left off here
+                    //why are output bus's not recieving correct input data from input busses
+                    //input:op in sim.rs confirmed working
+                    //guessing the bug is here
+                    // this is directly true because of the starting_state calculation
+                    // correct effect, wrong data
+                    // dbg!(&input_table[i]); // input_table is never (0,1) for some reason
+                    //   rewrite input_table logic
+                    //   rewrite operation input logic
 
-                        //if bool
-                        //  set value to bitdata
-                        //if u8
-                        //  set bool at bit_index to bitdata
+                    //if bool
+                    //  set value to bitdata
+                    //if u8
+                    //  set bool at bit_index to bitdata
 
-                        // let current_output:Option<&BusValue> = self.outputs.get(label);
-                        let index = block_bus
-                            .iter()
-                            .position(|b| b == &BlockProxy::new(i))
-                            .expect("uhoh");
-                        match bus_value {
-                            BusValue::Bit(b) => {
-                                *b = bitdata;
-                            }
-                            BusValue::U4(v) => set_bit!(v, index, bitdata),
-                            BusValue::U8(v) => set_bit!(v, index, bitdata),
-                            BusValue::U16(v) => set_bit!(v, index, bitdata),
-                            BusValue::U32(v) => set_bit!(v, index, bitdata),
-                            BusValue::U64(v) => set_bit!(v, index, bitdata),
-                            BusValue::Bus((_, data)) => {
-                                if bitdata {
-                                    let byte_index = index / 8;
-                                    let bit_in_byte = index % 8;
-                                    if bitdata {
-                                        data[byte_index] |= 1 << bit_in_byte;
-                                    } else {
-                                        data[byte_index] &= !(1 << bit_in_byte);
-                                    }
-                                }
+                    // let current_output:Option<&BusValue> = self.outputs.get(label);
+                    let index = block_bus
+                        .iter()
+                        .position(|b| b == &BlockProxy::new(i))
+                        .expect("uhoh");
+                    match bus_value {
+                        BusValue::Bit(b) => {
+                            *b = bitdata;
+                        }
+                        BusValue::U4(v) => set_bit!(v, index, bitdata),
+                        BusValue::U8(v) => set_bit!(v, index, bitdata),
+                        BusValue::U16(v) => set_bit!(v, index, bitdata),
+                        BusValue::U32(v) => set_bit!(v, index, bitdata),
+                        BusValue::U64(v) => set_bit!(v, index, bitdata),
+                        BusValue::Bus((_, data)) => {
+                            let byte_index = index / 8;
+                            let bit_in_byte = index % 8;
+                            if bitdata {
+                                data[byte_index] |= 1 << bit_in_byte;
+                            } else {
+                                data[byte_index] &= !(1 << bit_in_byte);
                             }
                         }
-                        // let new_val:BusValue<> = match bus_kind {
-                        //     BusValue::Bool(b) => bitdata||(*b as bool),
-                        //     BusValue::U8(v) => v,
-                        // };
-                        // let new_val = match bus_kind {
-                        //     BusKind::Bool => BusValue::Bool(bitdata),
-                        //     BusKind::U8 => {
-                        //         // actively fetch and compose current output
-                        //         // output accumulators?
-                        //     }
-                        // };
-                        // dbg!(new_val);
-                        // self.outputs.insert(label, new_val);
                     }
+                    // let new_val:BusValue<> = match bus_kind {
+                    //     BusValue::Bool(b) => bitdata||(*b as bool),
+                    //     BusValue::U8(v) => v,
+                    // };
+                    // let new_val = match bus_kind {
+                    //     BusKind::Bool => BusValue::Bool(bitdata),
+                    //     BusKind::U8 => {
+                    //         // actively fetch and compose current output
+                    //         // output accumulators?
+                    //     }
+                    // };
+                    // dbg!(new_val);
+                    // self.outputs.insert(label, new_val);
                 }
 
                 if bitdata {
@@ -431,32 +497,31 @@ impl<'a> Simulation<'a> {
             if *op == Op::Input as u8 {
                 // dbg!(&input_table[i]);
                 // input label hash is correct
-                let bitdata: bool = 
-                        self.input_label_hash
-                        .get(&BlockProxy::new(i))
-                        .and_then(|label| {
-                            // println!("{:?}",label);
-                            let (block_bus, value) = self.input_hash.get(label).unwrap();
-                            // value here is correct
-                            let bit_index =
-                                block_bus.iter().position(|&x| x == BlockProxy::new(i))?;
-                            Some(match value {
-                                BusValue::Bit(bit) => *bit,
-                                BusValue::U4(value) => (value >> bit_index) & 1 != 0,
-                                BusValue::U8(value) => (value >> bit_index) & 1 != 0,
-                                BusValue::U16(value) => (value >> bit_index) & 1 != 0,
-                                BusValue::U32(value) => (value >> bit_index) & 1 != 0,
-                                BusValue::U64(value) => (value >> bit_index) & 1 != 0,
+                let bitdata: bool = self
+                    .input_label_hash
+                    .get(&BlockProxy::new(i))
+                    .and_then(|label| {
+                        // println!("{:?}",label);
+                        let (block_bus, value) = self.input_hash.get(label).unwrap();
+                        // value here is correct
+                        let bit_index = block_bus.iter().position(|&x| x == BlockProxy::new(i))?;
+                        Some(match value {
+                            BusValue::Bit(bit) => *bit,
+                            BusValue::U4(value) => (value >> bit_index) & 1 != 0,
+                            BusValue::U8(value) => (value >> bit_index) & 1 != 0,
+                            BusValue::U16(value) => (value >> bit_index) & 1 != 0,
+                            BusValue::U32(value) => (value >> bit_index) & 1 != 0,
+                            BusValue::U64(value) => (value >> bit_index) & 1 != 0,
 
-                                // correct output bits
-                                BusValue::Bus((_, bus_data)) => {
-                                    let byte_index = (bit_index / 8) as usize;
-                                    let bit_in_byte = bit_index % 8;
-                                    ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
-                                }
-                            })
+                            // correct output bits
+                            BusValue::Bus((_, bus_data)) => {
+                                let byte_index = bit_index / 8;
+                                let bit_in_byte = bit_index % 8;
+                                ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
+                            }
                         })
-                        .unwrap_or(false);
+                    })
+                    .unwrap_or(false);
                 // correctly pushing the data to state
                 if bitdata {
                     or_mask[i / 8] |= 1 << (i % 8);

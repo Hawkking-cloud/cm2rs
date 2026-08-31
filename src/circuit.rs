@@ -1,12 +1,21 @@
 // circuit.rs
+#![allow(clippy::boxed_local,clippy::nonminimal_bool)]
 
 use std::collections::HashMap;
 
-use crate::sim::{BusKind, BusValue, Label, Op, Simulation, SimulationDescriptor};
+use crate::sim::{BusKind, BusValue, Label, Op, Simulation, SimulationDescriptor,SnapshotInfo};
+
+#[derive(Clone,Copy)]
+pub struct Cm2SaveOptions {
+    pub optimize_size: bool, // replacing 0 with nothing
+    pub round_position_floats: bool,
+    pub grid_scale: u8, // debugging connections
+    pub convert_ors: bool, // convert ors to nodes
+}
 
 #[derive(Copy,Clone,PartialEq)]
 pub enum Block {
-    NOR,
+    NOR, // TODO: add the rest of the operators
     AND,
     NAND,
     OR,
@@ -45,7 +54,7 @@ impl BlockProxy {
 }
 
 pub trait AsF32 {
-    fn as_f32(self) -> f32;
+    fn as_f32(&self) -> f32;
 }
 
 macro_rules! impl_as_f32 {
@@ -53,8 +62,8 @@ macro_rules! impl_as_f32 {
         $(
             impl AsF32 for $t {
                 #[inline(always)]
-                fn as_f32(self) -> f32 {
-                    self as f32
+                fn as_f32(&self) -> f32 {
+                    *self as f32
                 }
             }
         )*
@@ -107,6 +116,7 @@ pub struct BlockData {
     pub position: BlockPosition,
     inputs: Vec<BlockProxy>, // indices
 }
+
 pub struct CircuitBuilder<'a> {
     pub blocks: Vec<BlockData>,
     block_registry: HashMap<BlockPositionKey, BlockProxy>,
@@ -129,6 +139,101 @@ impl<'a> CircuitBuilder<'a> {
             output_label_hash: HashMap::new(),
         }
     }
+    pub fn from_cm2(cm2_str: String) -> CircuitBuilder<'a> {
+        let mut cb = CircuitBuilder::new();
+        // filter whitespace
+        let cm2_str:String = cm2_str.chars().filter(|c|!c.is_whitespace()).collect();
+
+        let mut string_iter = cm2_str.chars();
+
+        //TODO: dont panic on empty save string
+        
+        let mut argument_buffer = String::with_capacity(32); //TODO: what is the max size
+
+        // 1 == blocks 2 = wires 3 = //TODO: buildings
+        let mut phase:u8 = 1;
+        let mut arg_stack:Vec<String> = Vec::with_capacity(5);
+
+        // let mut last_char = ' ';
+        loop {
+            let c = string_iter.next().unwrap();
+            // last_char = c;
+            match c {
+                c if c.is_numeric() || (c == '.') || (c=='-')  => {
+                    argument_buffer.push(c);
+                }
+                ','|'+' => {
+                    // flush buffer to stack
+                    arg_stack.push(argument_buffer.clone());
+                    argument_buffer.clear();
+                }
+                c if (c=='?'&&phase==1) | (c==';') => {
+                     if !argument_buffer.is_empty() {
+        arg_stack.push(argument_buffer.clone());
+        argument_buffer.clear();
+    }
+                    //flush argument stack to block
+                    match phase {
+                        1 => {
+                            // add block
+                            // dbg!(&arg_stack);
+                            let block_id = arg_stack[0].parse::<u32>().expect("invalid block id");
+                            // let state = arg_stack[1] == "1";
+                            let x = -arg_stack[2].parse::<f32>().expect("invalid block x");
+                            let y = arg_stack[3].parse::<f32>().expect("invalid block y");
+                            let z = arg_stack[4].parse::<f32>().expect("invalid block z");
+                            //TODO: theres currently no way for the state to sustain through to
+                            //create_cm2, its overwritted by generated starting state
+                            cb.add_block((x,y,z),match block_id {
+                                0 => Block::NOR,
+                                1 => Block::AND,
+                                2 => Block::OR,
+                                3 => Block::XOR,
+                                4 => Block::OR, // button
+                                5 => Block::OR, // flipflop 
+                                6 => Block::OR, // led 
+                                7 => Block::OR, // sound 
+                                8 => Block::OR, // conductor 
+                                9 => Block::OR, // custom 
+                                10 => Block::OR, // nand 
+                                11 => Block::OR, // xnor 
+                                12 => Block::OR, // random 
+                                13 => Block::OR, // text
+                                14 => Block::OR, // tile 
+                                15 => Block::OR, // node 
+                                16 => Block::OR, // delay 
+                                17 => Block::OR, // antenna 
+                                18 => Block::OR, // conductorv2
+                                19 => Block::OR, // color mixer
+                                _ => {eprintln!("invalid block id {}",block_id);Block::OR},
+                            });
+                            
+                        },
+                        2 => {
+                            // add wire
+                           cb.add_input(BlockProxy::new(arg_stack[1].parse::<usize>().expect("invalid FROM block argument from in wire") - 1),BlockProxy::new(arg_stack[0].parse::<usize>().expect("invalid TO block argument in wire") - 1));
+                        },
+                        _ => {},
+                    };
+                    if c=='?' {
+                        phase+=1;
+                    }
+
+                    arg_stack.clear();
+                }
+                '?' => {
+                    phase+=1;
+                    arg_stack.clear();
+                    if phase == 3 {
+                        break;
+                    }
+                }
+                _ => {}
+            };
+        }
+
+        cb
+    }
     pub fn add_block<P>(&mut self, position: P, r#type: Block) -> BlockProxy
     where
         P: IntoBlockPosition,
@@ -137,7 +242,7 @@ impl<'a> CircuitBuilder<'a> {
 
         let index = self.blocks.len();
         self.blocks.push(BlockData {
-            r#type: r#type,
+            r#type,
             position: (-position.0,position.1,position.2),
             inputs: Vec::new(),
         });
@@ -145,11 +250,11 @@ impl<'a> CircuitBuilder<'a> {
             .insert(position.into_key(), BlockProxy::new(index));
         BlockProxy(index)
     }
-    pub fn add_input_bit<P:IntoBlockPosition>(&mut self, position: P, label: Label<'a>, value:BusValue) -> BlockProxy {
+    pub fn add_input_bit<P:IntoBlockPosition>(&mut self, position: P, value:BusValue, label: Label<'a>) -> BlockProxy {
         let position:BlockPosition = position.into_pos();
          let block = self.add_block(position,Block::Input);
         self.input_label_hash.insert(block,label);
-        self.input_hash.insert(label, (Box::new([block.clone()]), value));
+        self.input_hash.insert(label, (Box::new([block]), value));
         block
     }
     pub fn add_output_bit<P>(&mut self, position: P, label: Label<'a>) -> BlockProxy
@@ -159,7 +264,7 @@ impl<'a> CircuitBuilder<'a> {
         let position:BlockPosition = position.into_pos();
          let block = self.add_block(position,Block::Output);
         self.output_label_hash.insert(block,label);
-        self.output_hash.insert(label, (Box::new([block.clone()]), BusValue::Bit(false) ));
+        self.output_hash.insert(label, (Box::new([block]), BusValue::Bit(false) ));
         block
 
         //
@@ -320,7 +425,7 @@ impl<'a> CircuitBuilder<'a> {
         outputs.iter().for_each(|proxy|self.blocks.get_mut(proxy.value()).expect("invalid block in outputs").inputs.push(block1));
     }
 
-    pub fn wire_parallel(&mut self, bus1: Box<[BlockProxy]>, bus2: &Box<[BlockProxy]>) {
+    pub fn wire_parallel(&mut self, bus1: Box<[BlockProxy]>, bus2: &[BlockProxy]) {
         bus2.iter().enumerate().for_each(|(i, block)| {
             self.blocks
                 .get_mut(block.value())
@@ -360,32 +465,41 @@ impl<'a> CircuitBuilder<'a> {
         path.push(*block_proxy);
 
         // resolve predictable cases
-        let result = *block_type == Block::NOR && block.inputs.len()==0 ||
+        //TODO: add other predictable cases to optimize this
+        let result = 
+        *block_type == Block::NOR && block.inputs.is_empty()
+        ||
         // resolve direct cases
         *block_type == Block::NOR && {
             !block.inputs.iter().any(|proxy_i|self.solve_starting_state(path, map, proxy_i))
-        } ||
+        } 
+        ||
         *block_type == Block::AND && {
             !block.inputs.iter().any(|proxy_i|!self.solve_starting_state(path, map, proxy_i))
-        } ||
+        } 
+        ||
         *block_type == Block::NAND && {
             block.inputs.iter().any(|proxy_i|!self.solve_starting_state(path, map, proxy_i))
-        } ||
+        } 
+        ||
         (*block_type == Block::OR || *block_type == Block::Output) && {
 
             block.inputs.iter().any(|proxy_i|self.solve_starting_state(path,map,proxy_i))
-        } ||
+        } 
+        ||
         *block_type == Block::XOR && {
             // solve every input starting state, with true / false accumulators, 
             block.inputs.iter().filter(|proxy_i|self.solve_starting_state(path, map, proxy_i)).count() % 2 != 0
-        } ||
+        } 
+        ||
         *block_type == Block::XNOR && {
             block.inputs.iter().filter(|proxy_i|self.solve_starting_state(path, map, proxy_i)).count() % 2 == 0
-        } ||
+        } 
+        ||
         // resolve if is input and bit index of input value is true
         *block_type == Block::Input && 
         {
-            let (block_map,value) = self.input_hash.get(self.input_label_hash.get(&block_proxy).expect("invalid input data")).expect("invalid input data"); 
+            let (block_map,value) = self.input_hash.get(self.input_label_hash.get(block_proxy).expect("invalid input data")).expect("invalid input data"); 
             let bit_index = block_map.iter().position(|&proxy_i|proxy_i == *block_proxy).expect("invalid input data");
             //TODO: dont compute this for bool
 
@@ -397,7 +511,7 @@ impl<'a> CircuitBuilder<'a> {
                 BusValue::U32(v) => (v>>bit_index) &1 != 0,
                 BusValue::U64(v) => (v>>bit_index) &1 != 0,
                     BusValue::Bus((_, bus_data)) => {
-                        let byte_index = (bit_index / 8) as usize;
+                        let byte_index = bit_index / 8;
                         let bit_in_byte = bit_index % 8;
                         // good data
                         ((bus_data[byte_index] >> bit_in_byte) & 1) != 0
@@ -408,9 +522,40 @@ impl<'a> CircuitBuilder<'a> {
         map.insert(*block_proxy,result);
         result
     }
-    pub fn create_cm2(self) -> String {
-        // id,state,x,y,z,?blockproxy,blockproxy??
-        let out_size = self.blocks.len() * 15; // estimate size of output string
+    pub fn make_sim_schematic(&self) -> SnapshotInfo<'a> {
+        let mut location_hash :HashMap<usize,(f32,f32,f32)>= HashMap::new();
+        let mut input_map :HashMap<usize,(Box<[usize]>,Label<'a>)> = HashMap::new();
+        let mut output_map: HashMap<usize,(Box<[usize]>,Label<'a>)> = HashMap::new();
+
+        self.blocks.iter().enumerate().for_each(|(proxy,blockdata)|{
+            location_hash.insert(proxy,blockdata.position.into_pos());
+        });
+        self.input_hash.iter().for_each(|(label,(block_map,_))|{
+            let new_block_map:Box<[usize]> = block_map.iter().map(|b|b.value()).collect();
+            block_map.iter().for_each(|proxy|{
+                input_map.insert(proxy.value(),(new_block_map.clone(),label));
+            });
+        });
+         self.output_hash.iter().for_each(|(label,(block_map,_))|{
+            let new_block_map:Box<[usize]> = block_map.iter().map(|b|b.value()).collect();
+            block_map.iter().for_each(|proxy|{
+                output_map.insert(proxy.value(),(new_block_map.clone(),label));
+            });
+        });
+        SnapshotInfo {
+            location_hash,
+            input_map,
+            output_map,
+        }
+    }
+    pub fn create_cm2(&self,options: Cm2SaveOptions) -> String {
+        // id,state,x,y,z,;id,state,x,y,z,?proxy,proxy;proxy,proxy??
+        let out_size = 3 + self.blocks.iter().fold(0usize,|acc,block|{
+            acc+block.inputs.len() * 5+1
+        }); 
+        //TODO: add size optimizers
+
+        // shitty estimate size of output string
 
         let mut buf = String::with_capacity(out_size);
 
@@ -426,10 +571,10 @@ impl<'a> CircuitBuilder<'a> {
                 Block::NOR => "0,",
                 Block::AND => "1,",
                 Block::NAND => "10,",
-                Block::OR => "2,",
+                Block::OR => if options.convert_ors {"15,"} else {"2,"},
                 Block::XOR => "3,",
                 Block::XNOR => "11,",
-                Block::Output => "15,", // what to do here
+                Block::Output => "15,",
                 Block::Input => "5,",
             });
             buf.push_str(if self.solve_starting_state(&mut solving_path,&mut solving_hash,&BlockProxy::new(block_i)) {
@@ -437,8 +582,7 @@ impl<'a> CircuitBuilder<'a> {
             } else {
                 "0,"
             });
-            buf.push_str(&format!("{},{},{},",block.position.0,block.position.1,block.position.2));
-            buf.push_str(";");
+            buf.push_str(&format!("{},{},{},;",block.position.0 * options.grid_scale as f32,block.position.1 * options.grid_scale as f32,block.position.2 * options.grid_scale as f32));
         });
         buf.pop(); // TODO: gate this
         buf.push('?');
@@ -461,12 +605,6 @@ impl<'a> CircuitBuilder<'a> {
             .iter()
             .map(|b| b.inputs.iter().map(|v| v.value()).collect())
             .collect();
-        // self.input_map
-        //     .iter()
-        //     .for_each(|(block_map, label, bus_kind)| match bus_kind {
-        //         BusKind::Bool => {},
-        //         BusKind::U8 => {},
-        //     });
 
         let mut solver_path:Vec<BlockProxy> = Vec::new();
         let mut solver_map:HashMap<BlockProxy,bool> = HashMap::new();
@@ -482,71 +620,12 @@ impl<'a> CircuitBuilder<'a> {
                 }
             })
         }).collect();
-        
-        // let starting_state: Vec<u8> = self
-        //     .blocks
-        //     .chunks(8)
-        //     .enumerate()
-        //     .map(|(chunk_index, chunk)| {
-        //         chunk.iter().enumerate().fold(0u8, |byte, (j, block)| {
-        //             let i = chunk_index * 8 + j;
-        //             if match block.r#type {
-        //                 Block::NOR => !self.blocks[i]
-        //                     .inputs
-        //                     .iter()
-        //                     .filter(|input| self.blocks[input.value()].r#type == Block::Input)
-        //                     .any(|input| {
-        //                         self.input_label_hash
-        //                             .get(input)
-        //                             .and_then(|label| {
-        //                                 let (_, value) = self.input_hash.get(label).unwrap();
-        //                                 Some(match value {
-        //                                     BusValue::Bool(b) => *b,
-        //                                     BusValue::U8(v) => *v != 0,
-        //                                   })
-        //                             })
-        //                             .unwrap_or(false)
-        //                     }),
-        //                 Block::Input => self
-        //                     .input_label_hash
-        //                     .get(&BlockProxy::new(i))
-        //                     .and_then(|label| {
-        //                         if let Some((block_map, bus_value)) = self.input_hash.get(label) {
-        //                             let bit_index = block_map
-        //                                 .iter()
-        //                                 .position(|b| b.value() == i)
-        //                                 .expect("somethings not right");
-        //                             Some(match bus_value {
-        //                                 BusValue::Bool(b) => *b,
-        //                                 BusValue::U8(v) => {
-        //                                     let v = ((v >> bit_index) & 1) != 0;
-        //                                     // println!("{:?},{:?}", bit_index, v);
-        //                                     v
-        //                                 } // get bool at index
-        //                                   // block_map.position(i)
-        //                             })
-        //                         } else {
-        //                             None
-        //                         }
-        //                         // self.input_map
-        //                         //     .iter()
-        //                         //     .find(|(_, input_label, _)| label == input_label)
-        //                     })
-        //                     .unwrap_or(false),
-        //                 _ => false,
-        //             } {
-        //                 byte | (1u8 << j)
-        //             } else {
-        //                 byte
-        //             }
-        //         })
-        //     })
-        //     .collect();
+
 
         Simulation::new(&SimulationDescriptor {
-            size: size,
-            starting_state: starting_state,
-            starting_operations: starting_operations,
+            size,
+            starting_state,
+            starting_operations,
             input_hash: self.input_hash,
             input_label_hash: self.input_label_hash,
             starting_input_table: input_table,
@@ -556,3 +635,8 @@ impl<'a> CircuitBuilder<'a> {
     }
 }
 
+impl<'a> Default for CircuitBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
