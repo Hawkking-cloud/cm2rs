@@ -16,6 +16,7 @@ pub enum Op {
     OR = 6,
     XOR = 7,
     XNOR = 8,
+    CM2 = 9,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,6 +105,7 @@ pub struct SnapshotInfo<'a> {
     pub location_hash:HashMap<usize,(f32,f32,f32)>,
     pub input_map:HashMap<usize,(Box<[usize]>,Label<'a>)>,
     pub output_map:HashMap<usize,(Box<[usize]>,Label<'a>)>,
+    // pub cm2_map:HashMap<usize,u8>,
 }
 
 pub type Label<'a> = &'a str;
@@ -266,8 +268,11 @@ impl<'a> Simulation<'a> {
                     6 => "2,",
                     7 => "3,",
                     8 => "11,",
+                    9 => {
+                        // resolve saved cm2 block id, fallback to "15," (node)
+                        "15,"
+                    }
                     _ => "15,"
-
                 }
             );
             buf.push_str(

@@ -5,12 +5,18 @@ use std::collections::HashMap;
 
 use crate::sim::{BusKind, BusValue, Label, Op, Simulation, SimulationDescriptor,SnapshotInfo};
 
-#[derive(Clone,Copy)]
+#[derive(Clone, Copy)]
 pub struct Cm2SaveOptions {
     pub optimize_size: bool, // replacing 0 with nothing
     pub round_position_floats: bool,
     pub grid_scale: u8, // debugging connections
     pub convert_ors: bool, // convert ors to nodes
+}
+
+impl Default for Cm2SaveOptions {
+    fn default() -> Self {
+        Self { optimize_size: false, round_position_floats: false, grid_scale: 1, convert_ors: false }
+    }
 }
 
 #[derive(Copy,Clone,PartialEq)]
@@ -21,6 +27,10 @@ pub enum Block {
     OR,
     XOR,
     XNOR,
+    // TFlipFlop,
+
+    // CM2(u8),
+
     Input,
     Output,
 }
@@ -34,6 +44,10 @@ impl Block {
             Block::OR => Op::OR,
             Block::XOR => Op::XOR,
             Block::XNOR => Op::XNOR,
+            // Block::TFlipFlop => Op::TFlipFlop,
+
+            // Block::Cm2 => Op::Cm2,
+            
             Block::Output => Op::Output,
             Block::Input => Op::Input,
         };

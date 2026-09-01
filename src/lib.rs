@@ -6,6 +6,9 @@ pub mod sim;
 // scheming logic circuits 
 pub mod circuit;
 
+// template logic circuits
+pub mod modules;
+
 /*
  
 //leftoff
@@ -15,9 +18,16 @@ pub mod circuit;
     
 
 //things to start
-    implement other adders
+    implement other examples
+        RCA Subtractor
+        CLA Subtractor
+        Carry Skip Adder 
+        Carry Select Adder
+        Conditional Sum Adder
+        Carry Save Adder
+        Carry Bypass Adder
     make experimental 64 bit simd chunk branch
-    turn into feature and merge
+        turn into feature and merge
 
 
 
