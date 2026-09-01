@@ -66,9 +66,13 @@ cargo run --example cla_adder
 - Early problem with how simulating accepts active inputs between ticks
 
 
-## Planned features
+## Possible future commits
 - Proper integration for every cm2 block lol
 - Simulation compute upgrade (64b cpu simd operations)
+- CM2 Building integration
+- Block reformatting options
+- Logic optimization options
+- Size optimization options
 
 ## Planned examples
 - every other known adder, maybe some of the lookup table ones
