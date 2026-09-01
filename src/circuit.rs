@@ -11,11 +11,12 @@ pub struct Cm2SaveOptions {
     pub round_position_floats: bool,
     pub grid_scale: u8, // debugging connections
     pub convert_ors: bool, // convert ors to nodes
+    pub inputs_as_nodes: bool,
 }
 
 impl Default for Cm2SaveOptions {
     fn default() -> Self {
-        Self { optimize_size: false, round_position_floats: false, grid_scale: 1, convert_ors: false }
+        Self { optimize_size: false, round_position_floats: false, grid_scale: 1, convert_ors: false,inputs_as_nodes: false }
     }
 }
 
@@ -589,7 +590,7 @@ impl<'a> CircuitBuilder<'a> {
                 Block::XOR => "3,",
                 Block::XNOR => "11,",
                 Block::Output => "15,",
-                Block::Input => "5,",
+                Block::Input => if options.inputs_as_nodes {"15,"} else {""},
             });
             buf.push_str(if self.solve_starting_state(&mut solving_path,&mut solving_hash,&BlockProxy::new(block_i)) {
                 "1,"
